@@ -1,0 +1,48 @@
+menu "TrackSense configuration"
+
+config TRACKSENSE_WIFI_SSID
+    string "Telemetry Wi-Fi SSID"
+    default ""
+    help
+        SSID used by the ESP32-C6 for the telemetry uplink.
+
+config TRACKSENSE_WIFI_PASSWORD
+    string "Telemetry Wi-Fi password"
+    default ""
+    help
+        Password for the telemetry Wi-Fi network. Keep sdkconfig and firmware
+        images private because this value is compiled into the device image.
+
+config TRACKSENSE_UDP_HOST
+    string "Local UDP receiver IPv4 address"
+    default ""
+    help
+        Computer LAN address running the local UDP receiver. Used only when
+        the cloud API URL is empty.
+
+config TRACKSENSE_UDP_PORT
+    int "Local UDP receiver port"
+    range 1 65535
+    default 5005
+    help
+        Host UDP port published by Docker. Match this to UDP_PORT in the
+        project's .env file.
+
+config TRACKSENSE_API_URL
+    string "HTTPS telemetry API URL"
+    default ""
+    help
+        Leave empty to use local UDP. For a remote server, use an HTTPS URL.
+
+config TRACKSENSE_DEVICE_KEY
+    string "Device API key"
+    default ""
+    help
+        Per-device telemetry API key. Keep sdkconfig and firmware images
+        private because this value is compiled into the device image.
+
+config TRACKSENSE_DEVICE_ID
+    string "Device identifier"
+    default "tracksense-001"
+
+endmenu
