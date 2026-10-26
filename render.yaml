@@ -16,6 +16,10 @@ services:
           property: connectionString
       - key: DATABASE_SSL
         value: require
+      - key: SUPABASE_DATABASE_URL
+        sync: false
+      - key: SUPABASE_DB_PASSWORD
+        sync: false
       - key: DEVICE_API_KEY
         generateValue: true
 

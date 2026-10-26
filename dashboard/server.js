@@ -17,6 +17,11 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 if (NODE_ENV === 'production' && !DEVICE_API_KEY) {
   throw new Error('Production requires DEVICE_API_KEY.');
 }
+const SUPABASE_DATABASE_URL = process.env.SUPABASE_DATABASE_URL || '';
+const SUPABASE_DB_PASSWORD = process.env.SUPABASE_DB_PASSWORD || '';
+if (NODE_ENV === 'production' && SUPABASE_DATABASE_URL && !SUPABASE_DB_PASSWORD) {
+  throw new Error('Production requires SUPABASE_DB_PASSWORD when SUPABASE_DATABASE_URL is set.');
+}
 const DATA_DIR = path.join(__dirname, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const SCAN_LOG = path.join(DATA_DIR, 'scans.jsonl');
@@ -28,9 +33,10 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const databaseSsl = process.env.DATABASE_SSL === 'disable'
   ? false
   : { rejectUnauthorized: process.env.DATABASE_SSL !== 'require' };
-const pool = process.env.DATABASE_URL ? new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: databaseSsl,
+const pool = SUPABASE_DATABASE_URL || process.env.DATABASE_URL ? new Pool({
+  connectionString: SUPABASE_DATABASE_URL || process.env.DATABASE_URL,
+  ...(SUPABASE_DATABASE_URL ? { password: SUPABASE_DB_PASSWORD } : {}),
+  ssl: SUPABASE_DATABASE_URL ? { rejectUnauthorized: true } : databaseSsl,
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 8000
