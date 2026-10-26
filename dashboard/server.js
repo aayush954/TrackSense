@@ -36,7 +36,9 @@ const databaseSsl = process.env.DATABASE_SSL === 'disable'
 const pool = SUPABASE_DATABASE_URL || process.env.DATABASE_URL ? new Pool({
   connectionString: SUPABASE_DATABASE_URL || process.env.DATABASE_URL,
   ...(SUPABASE_DATABASE_URL ? { password: SUPABASE_DB_PASSWORD } : {}),
-  ssl: SUPABASE_DATABASE_URL ? { rejectUnauthorized: true } : databaseSsl,
+  ssl: SUPABASE_DATABASE_URL
+    ? { ca: fs.readFileSync(path.join(__dirname, 'supabase-prod-ca-2021.crt'), 'utf8'), rejectUnauthorized: true }
+    : databaseSsl,
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 8000

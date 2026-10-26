@@ -149,7 +149,7 @@ Cloud uploads use HTTPS and require the endpoint URL and device key. The server'
 - The browser dashboard has no login by design. Do not expose it publicly without adding suitable access controls and TLS.
 - `POST /api/telemetry/raw` requires the `X-Device-Key` header and accepts version-1 JSON telemetry. Do not share the device API key.
 - Render's `DATABASE_SSL=require` setting encrypts the database connection while accepting Render's self-signed certificate. Use `DATABASE_SSL=disable` only for local Docker networking; other SSL modes verify the database certificate.
-- For an optional external Supabase database, set `SUPABASE_DATABASE_URL` to its IPv4 **Session pooler** URL without a password, and set `SUPABASE_DB_PASSWORD` separately as a secret. The app verifies TLS for Supabase and prefers it over `DATABASE_URL`; keep the Render database configured until you have verified the migration and backed up any data you need.
+- For an optional external Supabase database, set `SUPABASE_DATABASE_URL` to its IPv4 **Session pooler** URL without a password, and set `SUPABASE_DB_PASSWORD` separately as a secret. The app verifies Supabase TLS using the public CA certificate in `dashboard/supabase-prod-ca-2021.crt` and prefers Supabase over `DATABASE_URL`; keep the Render database configured until you have verified the migration and backed up any data you need.
 - A new PostgreSQL database is initialized automatically. Existing local room, signal, and fingerprint configuration is seeded when its database rows are missing. Historical local CSV/JSONL scans are preserved but are not imported automatically.
 - Back up both the PostgreSQL volume and scan archive directory.
 
