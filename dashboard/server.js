@@ -33,12 +33,24 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const databaseSsl = process.env.DATABASE_SSL === 'disable'
   ? false
   : { rejectUnauthorized: process.env.DATABASE_SSL !== 'require' };
-const pool = SUPABASE_DATABASE_URL || process.env.DATABASE_URL ? new Pool({
-  connectionString: SUPABASE_DATABASE_URL || process.env.DATABASE_URL,
-  ...(SUPABASE_DATABASE_URL ? { password: SUPABASE_DB_PASSWORD } : {}),
-  ssl: SUPABASE_DATABASE_URL
-    ? { ca: fs.readFileSync(path.join(__dirname, 'supabase-prod-ca-2021.crt'), 'utf8'), rejectUnauthorized: true }
-    : databaseSsl,
+const supabasePoolConfig = SUPABASE_DATABASE_URL
+  ? (() => {
+    const url = new URL(SUPABASE_DATABASE_URL);
+    return {
+      host: url.hostname,
+      port: Number(url.port || 5432),
+      database: decodeURIComponent(url.pathname.slice(1)),
+      user: decodeURIComponent(url.username),
+      password: SUPABASE_DB_PASSWORD,
+      ssl: {
+        ca: fs.readFileSync(path.join(__dirname, 'supabase-prod-ca-2021.crt'), 'utf8'),
+        rejectUnauthorized: true
+      }
+    };
+  })()
+  : null;
+const pool = supabasePoolConfig || process.env.DATABASE_URL ? new Pool({
+  ...(supabasePoolConfig || { connectionString: process.env.DATABASE_URL, ssl: databaseSsl }),
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 8000
