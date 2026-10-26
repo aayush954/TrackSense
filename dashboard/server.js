@@ -25,9 +25,12 @@ const MAX_MEMORY_HISTORY = 5000;
 const MAX_RECENT_SCAN_IDS = 5000;
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
+const databaseSsl = process.env.DATABASE_SSL === 'disable'
+  ? false
+  : { rejectUnauthorized: process.env.DATABASE_SSL !== 'require' };
 const pool = process.env.DATABASE_URL ? new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_SSL === 'disable' ? false : { rejectUnauthorized: true },
+  ssl: databaseSsl,
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 8000

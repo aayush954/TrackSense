@@ -30,7 +30,7 @@ services:
       UDP_PORT: 5005
       DATABASE_URL: postgresql://${POSTGRES_USER:-tracksense}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@database:5432/${POSTGRES_DB:-tracksense}
       DATABASE_SSL: disable
-      DEVICE_API_KEY: ${DEVICE_API_KEY:?Set DEVICE_API_KEY in .env}
+      DEVICE_API_KEY: ${DEVICE_API_KEY:?Set DEVICE_API_KEY in the project .env file before starting Compose}
     ports:
       - "${PORT:-3000}:3000/tcp"
       - "${UDP_PORT:-5005}:5005/udp"

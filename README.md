@@ -37,6 +37,24 @@ docker compose logs -f dashboard
 
 Open `http://localhost:3000` (or the host port set by `PORT` in `.env`). **The dashboard does not require a browser password.** The telemetry API still requires `DEVICE_API_KEY`. Keep the dashboard on a trusted local network; configure a TLS reverse proxy and network access controls before exposing it outside that network.
 
+### Fix `Production requires DEVICE_API_KEY`
+
+The dashboard intentionally stops if it starts in production without its telemetry API key. Make sure the project-root `.env` file exists and has a non-empty `DEVICE_API_KEY` value, then start the services through Compose so it passes the key into the container:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+If `.env` already exists, edit it and replace the `DEVICE_API_KEY` placeholder with a private key. Then run from the project root:
+
+```powershell
+docker compose --env-file .env up --build -d
+docker compose ps
+docker compose logs --tail 50 dashboard
+```
+
+Do not put the key in the Dockerfile or commit it. Avoid starting the image with a plain `docker run` command unless you explicitly pass the key as a runtime environment variable. Configure the ESP32 with the same key if it sends HTTPS telemetry; local UDP telemetry does not use this API key.
+
 PostgreSQL is persisted in a named Docker volume. CSV and JSONL scan archives are stored in `DATA_DIR` (by default, `dashboard/data`). `docker compose down` stops services without deleting the database. Do not use `docker compose down -v` unless you intend to remove the database volume.
 
 If ports 3000 or 5005 are already used, choose available host ports in `.env`, for example:
@@ -130,6 +148,7 @@ Cloud uploads use HTTPS and require the endpoint URL and device key. The server'
 - `.env`, `sdkconfig`, build outputs, local scan archives, and Docker scan data are excluded from Git. Keep credentials and firmware images private.
 - The browser dashboard has no login by design. Do not expose it publicly without adding suitable access controls and TLS.
 - `POST /api/telemetry/raw` requires the `X-Device-Key` header and accepts version-1 JSON telemetry. Do not share the device API key.
+- Render's `DATABASE_SSL=require` setting encrypts the database connection while accepting Render's self-signed certificate. Use `DATABASE_SSL=disable` only for local Docker networking; other SSL modes verify the database certificate.
 - A new PostgreSQL database is initialized automatically. Existing local room, signal, and fingerprint configuration is seeded when its database rows are missing. Historical local CSV/JSONL scans are preserved but are not imported automatically.
 - Back up both the PostgreSQL volume and scan archive directory.
 
