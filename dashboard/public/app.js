@@ -1,15 +1,18 @@
 const $ = (id) => document.getElementById(id);
 const pageTitles = {
   overview: 'Overview',
-  location: 'Rooms & Fingerprint Map',
-  signals: 'Wi-Fi Signals',
-  history: 'History & Reports',
-  device: 'Device & Power'
+  live: 'Live Data (Real-time Scans)',
+  location: 'Rooms & Fingerprints',
+  signals: 'Access Points',
+  history: 'Scan History',
+  device: 'Settings'
 };
 
 let latest = null;
 let scanRows = [];
 let toastTimer = null;
+let dashboardMetrics = null;
+let archivedScans = [];
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -93,7 +96,9 @@ function go(page) {
 }
 
 document.querySelectorAll('.nav-link').forEach((button) => {
-  button.addEventListener('click', () => go(button.dataset.page));
+  button.addEventListener('click', () => {
+    if (button.dataset.page) go(button.dataset.page);
+  });
 });
 document.querySelectorAll('[data-open]').forEach((button) => {
   button.addEventListener('click', () => go(button.dataset.open));
@@ -110,6 +115,7 @@ function updateConnectionStatus(data) {
   $('sideStatus').textContent = status;
   $('topStatus').textContent = online ? 'Device online' : 'Device offline';
   $('sideDevice').textContent = `${data.deviceId || 'Tracker 01'} · ESP32-C6`;
+  $('headerDevice').textContent = data.deviceId || 'ESP32-C6';
 }
 
 function render(data) {
@@ -137,7 +143,7 @@ function render(data) {
     : 'No recent upload';
   $('motionValue').textContent = latest.motionSensor ? (latest.motion ? 'Moving' : 'Stationary') : 'Unavailable';
   $('motionDetail').textContent = latest.motionSensor ? 'Sensor ready' : 'Check LIS3DH power / I²C';
-  $('apCount').textContent = aps.length;
+  $('apCount').textContent = `${aps.length} detected in latest scan`;
   $('scanAge').textContent = latest.lastPacketAt ? `Last scan ${formatClock(latest.lastPacketAt)}` : 'No scan data';
   $('batteryValue').textContent = 'Not monitored';
   $('batteryDetail').textContent = 'No battery measurement circuit';
@@ -157,9 +163,275 @@ function render(data) {
   renderSignals(aps);
   renderSavedConfiguration(latest.signals || [], latest.fingerprints || []);
   renderRecentRows(aps);
+  renderAccessPointTable(aps);
+  renderRssiChart(aps);
+  renderLiveData(aps);
+  renderHistoryPreview(latest.history || []);
   $('latestScanLabel').textContent = latest.lastPacketAt
     ? `${aps.length} AP${aps.length === 1 ? '' : 's'} · ${formatClock(latest.lastPacketAt)}`
     : 'Waiting for the next scan';
+}
+
+function renderAccessPointTable(aps) {
+  const sorted = [...aps].sort((a, b) => Number(b.rssi) - Number(a.rssi));
+  $('overviewAccessPoints').innerHTML = sorted.length ? sorted.slice(0, 8).map((ap, index) => {
+    const rssi = Number(ap.rssi);
+    const quality = rssi >= -65 ? '' : rssi >= -75 ? ' medium' : ' weak';
+    const distance = hasNumber(ap.distanceM) ? `${Number(ap.distanceM).toFixed(2)} m` : '—';
+    return `<tr><td>${index + 1}</td><td title="${escapeHtml(ap.ssid || 'Hidden')}">${escapeHtml(ap.ssid || 'Hidden')}</td><td>${escapeHtml(ap.bssid)}</td><td><span class="rssi-chip${quality}">${rssi} dBm</span></td><td>${ap.channel ?? '—'}</td><td>${distance}</td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="empty-state">No access points in the latest scan.</td></tr>';
+}
+
+function renderRssiChart(aps) {
+  const sorted = [...aps].sort((a, b) => Number(b.rssi) - Number(a.rssi)).slice(0, 7);
+  const chart = sorted.length ? sorted.map((ap) => {
+    const rssi = Number(ap.rssi);
+    const height = Math.max(5, Math.min(100, 100 + rssi));
+    const quality = rssi >= -65 ? '' : rssi >= -75 ? ' medium' : ' weak';
+    return `<div class="chart-column" title="${escapeHtml(ap.ssid || 'Hidden')}: ${rssi} dBm"><span class="chart-value">${rssi}</span><div class="chart-bar${quality}" style="height:${height}%"></div><span class="chart-label">${escapeHtml(ap.ssid || 'Hidden')}</span></div>`;
+  }).join('') : '<div class="empty-state">No access points in the latest scan.</div>';
+  $('rssiChart').innerHTML = chart;
+  $('liveRssiChart').innerHTML = chart;
+}
+
+function renderLiveData(aps) {
+  const sorted = [...aps].sort((a, b) => Number(b.rssi) - Number(a.rssi));
+  $('liveScanTimestamp').textContent = latest.lastPacketAt
+    ? `Latest scan received ${formatDateTime(latest.lastPacketAt)}`
+    : 'Waiting for the first device scan';
+  $('liveDeviceId').textContent = latest.deviceId || '—';
+  $('liveScanTime').textContent = formatDateTime(latest.lastPacketAt);
+  $('liveApCount').textContent = String(aps.length);
+  $('liveMotionStatus').textContent = latest.motionSensor
+    ? (latest.motion ? 'Moving' : 'Stationary')
+    : 'Unavailable';
+  $('liveWifiStatus').textContent = latest.wifiConnected ? 'Connected' : 'Offline';
+  $('liveDeviceIp').textContent = latest.deviceIp || '—';
+  $('liveAccessPointRows').innerHTML = sorted.length ? sorted.map((ap, index) => {
+    const rssi = Number(ap.rssi);
+    const quality = rssi >= -65 ? '' : rssi >= -75 ? ' medium' : ' weak';
+    const distance = hasNumber(ap.distanceM) ? `${Number(ap.distanceM).toFixed(2)} m` : '—';
+    return `<tr><td>${index + 1}</td><td>${escapeHtml(ap.ssid || 'Hidden')}</td><td>${escapeHtml(ap.bssid)}</td><td><span class="rssi-chip${quality}">${rssi} dBm</span></td><td>${ap.channel ?? '—'}</td><td>${distance}</td><td>${formatClock(ap.lastSeen || latest.lastPacketAt)}</td></tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty-state">No access points in the latest scan.</td></tr>';
+}
+
+function renderHistoryPreview(history) {
+  const scans = new Map();
+  history.forEach((row) => {
+    const timestamp = Date.parse(row.at);
+    if (!Number.isFinite(timestamp)) return;
+    const scan = scans.get(timestamp) || { at: row.at, apCount: 0, motion: Boolean(row.motion), wifiConnected: row.wifiConnected };
+    scan.apCount += Number(row.apCount) || 0;
+    scan.motion = Boolean(row.motion);
+    if (typeof row.wifiConnected === 'boolean') scan.wifiConnected = row.wifiConnected;
+    scans.set(timestamp, scan);
+  });
+  const recent = [...scans.values()].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 5);
+  $('overviewHistoryRows').innerHTML = recent.length ? recent.map((scan) => {
+    const status = scan.wifiConnected === true ? 'Connected' : scan.wifiConnected === false ? 'Offline' : 'Received';
+    return `<tr><td>${formatClock(scan.at)}</td><td>${scan.apCount}</td><td>${scan.motion ? 'Moving' : 'Stationary'}</td><td class="${scan.wifiConnected ? 'status-connected' : ''}">${status}</td></tr>`;
+  }).join('') : '<tr><td colspan="4" class="empty-state">No recent scans yet.</td></tr>';
+}
+
+async function loadDashboardMetrics() {
+  try {
+    dashboardMetrics = await api('/api/metrics');
+    $('scanTotal').textContent = Number(dashboardMetrics.scans || 0).toLocaleString();
+    $('uniqueApCount').textContent = Number(dashboardMetrics.aps || 0).toLocaleString();
+    $('scanTotalDetail').textContent = `${Number(dashboardMetrics.total || 0).toLocaleString()} saved AP observations`;
+  } catch (error) {
+    $('scanTotalDetail').textContent = 'Could not load saved metrics';
+    showToast(error.message, true);
+  }
+}
+
+function answerDashboardQuestion(question) {
+  const text = question.toLowerCase();
+  const aps = Array.isArray(latest?.aps) ? latest.aps : [];
+  const sorted = [...aps].sort((a, b) => Number(b.rssi) - Number(a.rssi));
+  const location = latest?.location || {};
+  const rooms = latest?.rooms || [];
+  const room = rooms.find((item) => item.id === location.roomId);
+  const history = latest?.history || [];
+  const time = latest?.lastPacketAt ? formatDateTime(latest.lastPacketAt) : null;
+  const recentScanGroups = new Map();
+  archivedScans.forEach((scan) => {
+    const timestamp = Date.parse(scan.timestamp || scan.observed_at);
+    if (!Number.isFinite(timestamp)) return;
+    const key = scan.scanId || scan.scan_id || `${scan.deviceId || scan.device_id || ''}:${timestamp}`;
+    if (!recentScanGroups.has(key)) recentScanGroups.set(key, { at: new Date(timestamp).toISOString(), accessPoints: [] });
+    recentScanGroups.get(key).accessPoints.push(scan);
+  });
+  const archivedScanGroups = [...recentScanGroups.values()].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const namedAp = aps.find((ap) => {
+    const names = [ap.ssid, ap.bssid, ap.label].filter(Boolean);
+    return names.some((name) => text.includes(String(name).toLowerCase()));
+  });
+
+  if (/(what is rssi|explain rssi|rssi meaning|signal quality|what does.*dbm|dbm mean)/.test(text)) {
+    return 'RSSI is received Wi-Fi signal strength, shown in dBm. Values closer to 0 are stronger; around -50 dBm is very strong, while values below -75 dBm are weak. Distance derived from RSSI is only an estimate and can vary with walls and interference.';
+  }
+  if (/(help|what can|how do)/.test(text)) {
+    return `I can explain observed networks, RSSI and signal quality, estimated distance in meters, channels, strongest/weakest access points, location and confidence, motion, connectivity, battery readings, room calibration, and scan history. ${latest?.lastPacketAt ? `Current scan: ${aps.length} access points at ${time}.` : 'No device scan has arrived yet.'} Each answer refreshes the latest device state and recent saved scans before replying. I only report readings the device has sent.`;
+  }
+  if (!latest?.lastPacketAt) {
+    return 'I do not have a scan yet, so I cannot report live access points or a location. Check the device connection and try again after it sends telemetry.';
+  }
+  if (/(history|previous|earlier|last \d+ scans?|trend|changed|change over time)/.test(text) && archivedScanGroups.length) {
+    const requestedCount = text.match(/last\s+(\d+)\s+scans?/);
+    const groups = archivedScanGroups.slice(0, Math.min(20, Number(requestedCount?.[1]) || 5));
+    const historyAp = aps.find((ap) => [ap.ssid, ap.bssid, ap.label].filter(Boolean)
+      .some((name) => text.includes(String(name).toLowerCase())));
+    if (historyAp) {
+      const readings = groups.flatMap((group) => group.accessPoints
+        .filter((scan) => String(scan.bssid || '').toLowerCase() === String(historyAp.bssid).toLowerCase())
+        .map((scan) => ({ at: group.at, rssi: Number(scan.rssi ?? scan.rssi_dbm) })))
+        .filter((reading) => Number.isFinite(reading.rssi));
+      if (readings.length) {
+        return `${historyAp.ssid || historyAp.bssid} readings in the ${readings.length} most recent archived observations: ${readings.map((reading) => `${reading.rssi} dBm at ${formatClock(reading.at)}`).join('; ')}.`;
+      }
+    }
+    const samples = groups.map((group) => {
+      const strongest = group.accessPoints.reduce((best, scan) => {
+        const rssi = Number(scan.rssi ?? scan.rssi_dbm);
+        return Number.isFinite(rssi) && (!best || rssi > best.rssi) ? { rssi, ssid: scan.ssid || 'Hidden' } : best;
+      }, null);
+      return `${formatClock(group.at)}: ${group.accessPoints.length} AP${group.accessPoints.length === 1 ? '' : 's'}${strongest ? `, strongest ${strongest.ssid} at ${strongest.rssi} dBm` : ''}`;
+    });
+    return `Recent archived scans:\n${samples.join('\n')}`;
+  }
+  if (namedAp && /(distance|far|near|meter|metre|range)/.test(text)) {
+    return hasNumber(namedAp.distanceM)
+      ? `${namedAp.ssid || namedAp.label || namedAp.bssid} has an estimated distance of ${Number(namedAp.distanceM).toFixed(2)} m. This is an RSSI-based estimate, not a measured range.`
+      : `There is no distance estimate for ${namedAp.ssid || namedAp.bssid} in the current scan.`;
+  }
+  if (namedAp && /(signal|rssi|strong|weak|channel|distance|far|near)/.test(text)) {
+    return `${namedAp.ssid || namedAp.label || 'This access point'} was observed at ${namedAp.rssi} dBm on channel ${namedAp.channel ?? 'unknown'}${hasNumber(namedAp.distanceM) ? `, with an estimated distance of ${Number(namedAp.distanceM).toFixed(2)} m` : ''}.`;
+  }
+  if (/(strongest|best signal|nearest|closest)/.test(text)) {
+    if (!sorted.length) return 'The latest scan did not detect any access points.';
+    const ap = sorted[0];
+    return `The strongest observed access point is ${ap.ssid || 'Hidden'} (${ap.bssid}) at ${ap.rssi} dBm on channel ${ap.channel ?? 'unknown'}${hasNumber(ap.distanceM) ? `, estimated ${Number(ap.distanceM).toFixed(2)} m away` : ''}.`;
+  }
+  if (/(weakest|worst signal)/.test(text)) {
+    if (!sorted.length) return 'The latest scan did not detect any access points.';
+    const ap = sorted[sorted.length - 1];
+    return `The weakest observed access point is ${ap.ssid || 'Hidden'} (${ap.bssid}) at ${ap.rssi} dBm${hasNumber(ap.distanceM) ? `, estimated ${Number(ap.distanceM).toFixed(2)} m away` : ''}.`;
+  }
+  if (/(how many|number of|count|total).*(scan)|\bscans?\b.*(how many|count|total)/.test(text)) {
+    return dashboardMetrics
+      ? `The saved archive contains ${Number(dashboardMetrics.scans || 0).toLocaleString()} scans and ${Number(dashboardMetrics.total || 0).toLocaleString()} access-point observations.`
+      : `There are ${history.length.toLocaleString()} scans in recent in-memory history. The saved archive count is still loading.`;
+  }
+  if (/(how many|number of|count|total).*(access point|\bap\b|network)|\b(access point|\bap\b|network).*(how many|count|detected)/.test(text)) {
+    return `The latest scan detected ${aps.length} access point${aps.length === 1 ? '' : 's'}${dashboardMetrics ? `. The saved archive contains ${Number(dashboardMetrics.aps || 0).toLocaleString()} unique BSSIDs and ${Number(dashboardMetrics.total || 0).toLocaleString()} access-point observations` : ''}.`;
+  }
+  if (/(list|show|which).*(access point|network)|all access point|latest scan|recent scan/.test(text)) {
+    if (!aps.length) return 'The latest scan did not detect any access points.';
+    return `Latest scan (${time}):\n${sorted.map((ap, index) => `${index + 1}. ${ap.ssid || 'Hidden'} — ${ap.rssi} dBm, channel ${ap.channel ?? 'unknown'}${hasNumber(ap.distanceM) ? `, ${Number(ap.distanceM).toFixed(2)} m` : ''}`).join('\n')}`;
+  }
+  if (/(where|location|room|position|coordinate|fingerprint)/.test(text)) {
+    if (!location.roomId) return `${location.label || 'The location is not calibrated yet.'}${location.note ? ` ${location.note}` : ''} Add a room and capture fingerprint points to enable room-level positioning.`;
+    return `The current estimate is ${room?.name || 'an unlabelled room'}${location.label ? `, near ${location.label}` : ''}${hasNumber(location.x) && hasNumber(location.y) ? ` at (${Number(location.x).toFixed(1)}, ${Number(location.y).toFixed(1)}) m` : ''}. Confidence: ${location.confidence || 'unknown'}${hasNumber(location.matchedAPs) ? `, matched ${location.matchedAPs} access points` : ''}.`;
+  }
+  if (/(confidence|accurate|accuracy|reliable)/.test(text)) {
+    return location.confidence
+      ? `The current location estimate is ${location.confidence} confidence${hasNumber(location.matchedAPs) ? ` with ${location.matchedAPs} matched access points` : ''}. RSSI fingerprinting is approximate; adding well-spaced calibration points can improve it.`
+      : 'There is no calibrated location confidence yet. Add a room and capture fingerprint points to calibrate the estimate.';
+  }
+  if (/(motion|moving|stationary)/.test(text)) {
+    return latest.motionSensor
+      ? `The motion sensor is ready and the latest reported state is ${latest.motion ? 'moving' : 'stationary'}${time ? ` (scan received ${time})` : ''}.`
+      : 'Motion status is unavailable because the device has not reported a ready motion sensor.';
+  }
+  if (/(connected|connection|online|offline|device|telemetry|upload|ip address)/.test(text)) {
+    const isOnline = Date.now() - Date.parse(latest.lastPacketAt) < 30000;
+    return `Device ${latest.deviceId || 'Tracker'} is ${isOnline ? 'online' : 'not recently online'}; Wi-Fi uplink is ${latest.wifiConnected ? 'connected' : 'offline'}${latest.deviceIp ? ` at ${latest.deviceIp}` : ''}. Last telemetry: ${time}.`;
+  }
+  const requestedChannel = text.match(/\bchannel\s*(\d{1,3})\b/);
+  if (requestedChannel && /(how many|any|which|list|on)/.test(text)) {
+    const channelAps = sorted.filter((ap) => Number(ap.channel) === Number(requestedChannel[1]));
+    return channelAps.length
+      ? `${channelAps.length} access point${channelAps.length === 1 ? '' : 's'} were seen on channel ${requestedChannel[1]}: ${channelAps.map((ap) => `${ap.ssid || 'Hidden'} (${ap.rssi} dBm)`).join(', ')}.`
+      : `No access points were observed on channel ${requestedChannel[1]} in the latest scan.`;
+  }
+  if (/(channel|frequency)/.test(text)) {
+    return sorted.length
+      ? `Observed channels: ${sorted.map((ap) => `${ap.ssid || 'Hidden'}: ${ap.channel ?? 'unknown'}`).join('; ')}.`
+      : 'No access points or channels were reported in the latest scan.';
+  }
+  if (/(average|mean).*(signal|rssi)|average signal/.test(text)) {
+    if (!aps.length) return 'There are no RSSI readings to average in the latest scan.';
+    const average = aps.reduce((total, ap) => total + Number(ap.rssi), 0) / aps.length;
+    return `The average RSSI across ${aps.length} access points in the latest scan is ${average.toFixed(1)} dBm.`;
+  }
+  if (/(how many|number of|count|total).*(room|fingerprint)/.test(text)) {
+    return `The dashboard has ${rooms.length} configured room${rooms.length === 1 ? '' : 's'} and ${(latest.fingerprints || []).length} fingerprint point${(latest.fingerprints || []).length === 1 ? '' : 's'}.`;
+  }
+  if (/(battery|voltage|power)/.test(text)) {
+    return hasNumber(latest.batteryVoltage)
+      ? `The latest reported battery reading is ${Number(latest.batteryVoltage).toFixed(2)} V${hasNumber(latest.batteryPercent) ? ` (${Number(latest.batteryPercent).toFixed(0)}%)` : ''}.`
+      : 'The device has not reported a battery reading; this hardware setup may not include a battery measurement circuit.';
+  }
+  if (/(scan|history|how often|last scan|when)/.test(text)) {
+    const recent = history.slice(-5).reverse();
+    return `${recent.length ? `There are ${history.length} recent scan records in the live history. The latest scan arrived at ${time} and detected ${aps.length} access points.` : `The latest telemetry arrived at ${time}.`}${history.length > 1 ? ` Recent scan times: ${recent.map((scan) => formatClock(scan.at)).join(', ')}.` : ''}`;
+  }
+  if (/(distance|meter|metre|range)/.test(text)) {
+    return 'Access-point distance is estimated in meters from RSSI and the configured path-loss model. It is an approximation, not a direct distance measurement. Ask about a specific network or open Live Data to see its current estimate.';
+  }
+  if (/(explain|rssi|signal strength)/.test(text)) {
+    return `I can explain the observed scan, RSSI and signal quality, estimated distances in meters, channels, strongest/weakest access points, location and confidence, motion, device connectivity, battery readings, and recent scan history. Current scan: ${aps.length} access points${time ? ` at ${time}` : ''}. I only report data the device has actually sent.`;
+  }
+  return `I can answer questions about the live TrackSense data, but I could not match that question to an observed field. Try asking about a network name, RSSI, distance in meters, channel, location, motion, device connection, battery, or recent scans. I won't invent readings that aren't in the data.`;
+}
+
+function appendChatMessage(message, role) {
+  const node = document.createElement('div');
+  node.className = `chat-message ${role === 'user' ? 'user-message' : 'assistant-message'}`;
+  node.textContent = message;
+  $('chatMessages').append(node);
+  $('chatMessages').scrollTop = $('chatMessages').scrollHeight;
+}
+
+function sendChatQuestion(question) {
+  const cleanQuestion = question.trim();
+  if (!cleanQuestion) return;
+  appendChatMessage(cleanQuestion, 'user');
+  const pending = document.createElement('div');
+  pending.className = 'chat-message assistant-message';
+  pending.textContent = 'Checking the latest device data…';
+  $('chatMessages').append(pending);
+  $('chatMessages').scrollTop = $('chatMessages').scrollHeight;
+  const submitButton = $('chatForm').querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  $('chatInput').disabled = true;
+  Promise.all([
+    api('/api/state'),
+    api('/api/metrics'),
+    api('/api/scans?limit=1000')
+  ]).then(([state, metrics, scanResponse]) => {
+    latest = state;
+    dashboardMetrics = metrics;
+    archivedScans = Array.isArray(scanResponse.scans) ? scanResponse.scans : [];
+    render(state);
+    pending.textContent = answerDashboardQuestion(cleanQuestion);
+  }).catch((error) => {
+    pending.textContent = `I could not refresh the latest device data, so I cannot answer reliably right now. ${error.message}`;
+    showToast('Chat could not refresh live dashboard data.', true);
+  }).finally(() => {
+    submitButton.disabled = false;
+    $('chatInput').disabled = false;
+    $('chatInput').focus();
+    $('chatMessages').scrollTop = $('chatMessages').scrollHeight;
+  });
+}
+
+function setChatOpen(open) {
+  $('chatbotPanel').classList.toggle('open', open);
+  $('chatbotPanel').setAttribute('aria-hidden', String(!open));
+  $('chatbotToggle').setAttribute('aria-expanded', String(open));
+  if (open) $('chatInput').focus();
 }
 
 function renderRoomSelects(rooms) {
@@ -235,7 +507,7 @@ function renderSignals(aps) {
     <div class="signal-row"><span class="signal-network"><strong>${escapeHtml(ap.label || ap.ssid || 'Hidden')}</strong><small>${escapeHtml(roomName(ap.roomId))}</small></span><div class="bar"><i style="width:${Math.max(5, Math.min(100, 100 + Number(ap.rssi)))}%"></i></div><b>${Number(ap.rssi)} dBm</b></div>`
   ).join('') : '<div class="empty-state">No access points in the latest scan.</div>';
   $('signalRows').innerHTML = sorted.length ? sorted.map((ap) => `
-    <tr><td>${escapeHtml(ap.ssid || 'Hidden')}</td><td>${escapeHtml(ap.bssid)}</td><td>${escapeHtml(roomName(ap.roomId))}</td><td class="rssi">${Number(ap.rssi)} dBm</td><td>${ap.channel ?? '—'}</td><td>${Number.isFinite(Number(ap.distanceM)) ? `${Number(ap.distanceM).toFixed(2)} m` : '—'}</td><td><span class="quality">${signalQuality(ap.rssi)}</span></td></tr>`
+    <tr><td>${escapeHtml(ap.ssid || 'Hidden')}</td><td>${escapeHtml(ap.bssid)}</td><td>${escapeHtml(roomName(ap.roomId))}</td><td class="rssi">${Number(ap.rssi)} dBm</td><td>${ap.channel ?? '—'}</td><td>${hasNumber(ap.distanceM) ? `${Number(ap.distanceM).toFixed(2)} m` : '—'}</td><td><span class="quality">${signalQuality(ap.rssi)}</span></td></tr>`
   ).join('') : '<tr><td colspan="7" class="empty-state">No access points in the latest scan.</td></tr>';
   $('scanSummary').textContent = latest?.lastPacketAt
     ? `${sorted.length} access point records · latest scan ${formatDateTime(latest.lastPacketAt)}`
@@ -257,7 +529,7 @@ function renderRecentRows(aps) {
   const estimate = latest.location || {};
   const observedRoom = latest.rooms?.find((room) => room.id === estimate.roomId)?.name || 'Unknown';
   $('recentRows').innerHTML = aps.length ? [...aps].sort((a, b) => Number(b.rssi) - Number(a.rssi)).slice(0, 8).map((ap) => `
-      <tr><td>${formatClock(latest.lastPacketAt)}</td><td>${escapeHtml(ap.ssid || 'Hidden')}</td><td>${escapeHtml(observedRoom)}</td><td>${escapeHtml(roomName(ap.roomId))}</td><td class="rssi">${Number(ap.rssi)} dBm</td><td>${Number.isFinite(Number(ap.distanceM)) ? `${Number(ap.distanceM).toFixed(2)} m` : '—'}</td><td>${latest.motionSensor ? (latest.motion ? 'Moving' : 'Stationary') : 'Unavailable'}</td></tr>`
+      <tr><td>${formatClock(latest.lastPacketAt)}</td><td>${escapeHtml(ap.ssid || 'Hidden')}</td><td>${escapeHtml(observedRoom)}</td><td>${escapeHtml(roomName(ap.roomId))}</td><td class="rssi">${Number(ap.rssi)} dBm</td><td>${hasNumber(ap.distanceM) ? `${Number(ap.distanceM).toFixed(2)} m` : '—'}</td><td>${latest.motionSensor ? (latest.motion ? 'Moving' : 'Stationary') : 'Unavailable'}</td></tr>`
     ).join('') : '<tr><td colspan="7" class="empty-state">No access points in the latest scan.</td></tr>';
 }
 
@@ -333,7 +605,7 @@ async function loadScans() {
       : '';
     $('historySummary').textContent = `${total.toLocaleString()} matching AP observations${total > resultCount ? ` · displaying latest ${resultCount.toLocaleString()}` : ''}${rangeDescription} · ${response.storage || 'local-jsonl'} storage`;
     $('historyRows').innerHTML = scanRows.length ? scanRows.map((row) => `
-      <tr><td>${formatDateTime(row.timestamp)}</td><td>${escapeHtml(row.deviceId || row.device_id || '—')}</td><td>${escapeHtml(row.roomName || row.room_name || 'Unknown / not calibrated')}</td><td>${escapeHtml(row.signalRoomName || row.signal_room_name || 'Not assigned')}</td><td>${escapeHtml(row.ssid || 'Hidden')}</td><td>${escapeHtml(row.bssid)}</td><td class="rssi">${Number(row.rssi ?? row.rssi_dbm)} dBm</td><td>${row.channel ?? '—'}</td><td>${Number.isFinite(Number(row.distanceM)) ? `${Number(row.distanceM).toFixed(2)} m` : '—'}</td><td>${row.motion ? 'Moving' : 'Stationary'}</td><td>${row.wifiConnected ? 'Connected' : 'Offline / buffered'}</td></tr>`
+      <tr><td>${formatDateTime(row.timestamp)}</td><td>${escapeHtml(row.deviceId || row.device_id || '—')}</td><td>${escapeHtml(row.roomName || row.room_name || 'Unknown / not calibrated')}</td><td>${escapeHtml(row.signalRoomName || row.signal_room_name || 'Not assigned')}</td><td>${escapeHtml(row.ssid || 'Hidden')}</td><td>${escapeHtml(row.bssid)}</td><td class="rssi">${Number(row.rssi ?? row.rssi_dbm)} dBm</td><td>${row.channel ?? '—'}</td><td>${hasNumber(row.distanceM) ? `${Number(row.distanceM).toFixed(2)} m` : '—'}</td><td>${row.motion ? 'Moving' : 'Stationary'}</td><td>${row.wifiConnected ? 'Connected' : 'Offline / buffered'}</td></tr>`
     ).join('') : '<tr><td colspan="11" class="empty-state">No observations match the selected time range.</td></tr>';
   } catch (error) {
     showToast(error.message, true);
@@ -424,6 +696,23 @@ $('detectedAccessPoint').addEventListener('change', (event) => {
 $('refreshButton').addEventListener('click', () => {
   refreshState();
   loadScans();
+  loadDashboardMetrics();
+});
+$('chatbotToggle').addEventListener('click', () => setChatOpen(!$('chatbotPanel').classList.contains('open')));
+$('chatClose').addEventListener('click', () => setChatOpen(false));
+$('assistantNavButton').addEventListener('click', () => setChatOpen(true));
+$('chatForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const input = $('chatInput');
+  sendChatQuestion(input.value);
+  input.value = '';
+  input.focus();
+});
+document.querySelectorAll('[data-chat-prompt]').forEach((button) => {
+  button.addEventListener('click', () => sendChatQuestion(button.dataset.chatPrompt));
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && $('chatbotPanel').classList.contains('open')) setChatOpen(false);
 });
 $('historyFilterForm').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -451,4 +740,11 @@ if (typeof io === 'function') {
 }
 refreshState();
 loadScans();
+loadDashboardMetrics();
+function updateHeaderClock() {
+  $('headerClock').textContent = new Date().toLocaleString();
+}
+updateHeaderClock();
+setInterval(updateHeaderClock, 1000);
 setInterval(refreshState, 5000);
+setInterval(loadDashboardMetrics, 60000);

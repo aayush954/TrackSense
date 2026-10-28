@@ -143,7 +143,7 @@ async function initDb() {
     state.wifiConnected = last.wifi_connected;
     const currentAt = state.lastPacketAt; state.aps = {};
     for (const r of sorted.filter(r => new Date(r.observed_at).getTime() >= new Date(currentAt).getTime()-30000)) state.aps[r.bssid] = {bssid:r.bssid,ssid:r.ssid,rssi:r.rssi_dbm,channel:r.channel,lastSeen:new Date(r.observed_at).toISOString()};
-    state.history = sorted.map(r=>({at:new Date(r.observed_at).toISOString(), strongestRssi:r.rssi_dbm, apCount:1, motion:r.motion})).slice(-MAX_MEMORY_HISTORY);
+    state.history = sorted.map(r=>({at:new Date(r.observed_at).toISOString(), strongestRssi:r.rssi_dbm, apCount:1, motion:r.motion, wifiConnected:r.wifi_connected})).slice(-MAX_MEMORY_HISTORY);
   }
   const latestScan = await pool.query(`SELECT device_id,scan_id,received_at,motion_state,sensor_status,
     wifi_connected,battery_voltage,battery_percent,source_ip FROM telemetry_scans
@@ -160,12 +160,13 @@ async function initDb() {
         WHERE device_id=$1 AND scan_id=$2 ORDER BY id`,[scan.device_id,scan.scan_id]);
       for(const ap of latestAps.rows) state.aps[ap.bssid]={bssid:ap.bssid,ssid:ap.ssid,rssi:ap.rssi_dbm,channel:ap.channel,lastSeen:receivedAt};
       const recentScans=await pool.query(`SELECT t.received_at,t.motion_state,
+        t.wifi_connected,
         (SELECT MAX(o.rssi_dbm) FROM scan_observations o WHERE o.device_id=t.device_id AND o.scan_id=t.scan_id) AS strongest_rssi,
         (SELECT COUNT(*)::int FROM scan_observations o WHERE o.device_id=t.device_id AND o.scan_id=t.scan_id) AS ap_count
         FROM telemetry_scans t WHERE t.device_id=$1 ORDER BY t.received_at DESC LIMIT 120`,[scan.device_id]);
       state.history=recentScans.rows.reverse().map(row=>({
         at:new Date(row.received_at).toISOString(),strongestRssi:row.strongest_rssi,
-        apCount:row.ap_count,motion:row.motion_state==='moving'
+        apCount:row.ap_count,motion:row.motion_state==='moving',wifiConnected:row.wifi_connected
       }));
     }
   }
@@ -444,7 +445,7 @@ async function processPayload(text, sourceIp, deviceId='tracksense-001') {
   state.batteryVoltage=parsed.batteryVoltage; state.batteryPercent=parsed.batteryPercent;
   state.aps=Object.fromEntries(parsed.aps.map(a=>[a.bssid,{...a,lastSeen:at}]));
   state.history.push({at,strongestRssi:parsed.aps.length?Math.max(...parsed.aps.map(a=>a.rssi)):null,
-    apCount:parsed.aps.length,motion:parsed.motion});
+    apCount:parsed.aps.length,motion:parsed.motion,wifiConnected});
   if(state.history.length>MAX_MEMORY_HISTORY)state.history=state.history.slice(-MAX_MEMORY_HISTORY);
   if (records.length) {
     try { fs.appendFileSync(SCAN_LOG,records.map(r=>JSON.stringify(r)).join('\n')+'\n','utf8'); }
@@ -645,7 +646,46 @@ app.get('/api/export.csv',async(req,res)=>{
     res.send(rows.map(r=>r.map(csvCell).join(',')).join('\r\n'));
   }catch(e){console.error('Export failed:',e.message);res.status(500).send('Could not export scan history');}
 });
-app.get('/api/metrics',async(_req,res)=>{try{if(pool&&dbReady){const r=await pool.query(`SELECT COUNT(*)::bigint total,COUNT(DISTINCT bssid)::int aps,COUNT(DISTINCT device_id)::int devices,MIN(observed_at) first_seen,MAX(observed_at) last_seen FROM scan_observations`);return res.json({...r.rows[0],storage:'postgresql'});}const n=fs.existsSync(SCAN_LOG)?fs.readFileSync(SCAN_LOG,'utf8').split(/\r?\n/).filter(Boolean).length:0;res.json({total:n,aps:new Set(Object.keys(state.aps)).size,devices:state.lastPacketAt?1:0,first_seen:null,last_seen:state.lastPacketAt,storage:'local-jsonl'});}catch(e){res.status(500).json({error:'Metrics unavailable'});}});
+app.get('/api/metrics',async(_req,res)=>{
+  try {
+    if(pool&&dbReady) {
+      const result=await pool.query(`SELECT
+        (SELECT COUNT(*) FROM scan_observations)::bigint total,
+        (SELECT COUNT(DISTINCT bssid) FROM scan_observations)::int aps,
+        (SELECT COUNT(DISTINCT device_id) FROM scan_observations)::int devices,
+        GREATEST(
+          (SELECT COUNT(*) FROM telemetry_scans),
+          (SELECT COUNT(DISTINCT COALESCE(scan_id,observed_at::text)) FROM scan_observations)
+        )::bigint scans,
+        (SELECT MIN(observed_at) FROM scan_observations) first_seen,
+        (SELECT MAX(observed_at) FROM scan_observations) last_seen`);
+      return res.json({...result.rows[0],storage:'postgresql'});
+    }
+    const records=fs.existsSync(SCAN_LOG)
+      ? fs.readFileSync(SCAN_LOG,'utf8').split(/\r?\n/).filter(Boolean)
+      : [];
+    const scanIds=new Set();
+    const bssids=new Set();
+    records.forEach(line=>{
+      const match=line.match(/"scanId"\s*:\s*"([^"]+)"/)||line.match(/"timestamp"\s*:\s*"([^"]+)"/);
+      if(match)scanIds.add(match[1]);
+      const bssid=line.match(/"bssid"\s*:\s*"([^"]+)"/i);
+      if(bssid)bssids.add(bssid[1].toLowerCase());
+    });
+    res.json({
+      total:records.length,
+      scans:Math.max(scanIds.size,state.history.length),
+      aps:bssids.size || new Set(Object.keys(state.aps)).size,
+      devices:state.lastPacketAt?1:0,
+      first_seen:null,
+      last_seen:state.lastPacketAt,
+      storage:'local-jsonl'
+    });
+  } catch(e) {
+    console.error('Metrics query failed:',e.message);
+    res.status(500).json({error:'Metrics unavailable'});
+  }
+});
 
 const udp=dgram.createSocket('udp4');
 udp.on('error',err=>console.error('UDP receiver error:',err.message));

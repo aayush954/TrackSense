@@ -3,22 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#eaf3fb">
+  <meta name="theme-color" content="#10243a">
   <title>TrackSense | Location Command Center</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <aside class="sidebar">
+  <header class="site-header">
     <a class="brand" href="/" aria-label="TrackSense dashboard">
       <img class="brand-logo" src="/tracksense-logo.svg" alt="">
-      <span><strong>TrackSense</strong></span>
+      <span><strong>TrackSense</strong><small>Indoor Object Location Detection</small></span>
     </a>
+    <div class="header-status">
+      <div class="device-pill"><span class="status-dot" id="topDot"></span><span id="topStatus">Device offline</span></div>
+      <span class="device-name">▦ &nbsp;<span id="headerDevice">ESP32-C6</span></span>
+      <time id="headerClock"></time>
+    </div>
+  </header>
+  <aside class="sidebar">
     <nav class="nav" aria-label="Main navigation">
-      <button class="nav-link active" data-page="overview"><span>⌂</span>Overview</button>
-      <button class="nav-link" data-page="location"><span>⌖</span>Rooms &amp; Map</button>
-      <button class="nav-link" data-page="signals"><span>⌁</span>Wi-Fi Signals</button>
-      <button class="nav-link" data-page="history"><span>◷</span>History &amp; Reports</button>
-      <button class="nav-link" data-page="device"><span>⚙</span>Device</button>
+      <button class="nav-link active" data-page="overview"><span>⌂</span>Dashboard</button>
+      <button class="nav-link" data-page="live"><span>▥</span>Live Data</button>
+      <button class="nav-link" data-page="location"><span>⌖</span>Rooms &amp; Fingerprints</button>
+      <button class="nav-link" data-page="history"><span>▤</span>Scan History</button>
+      <button class="nav-link" data-page="signals"><span>⌁</span>Access Points</button>
+      <button class="nav-link" id="assistantNavButton" type="button"><span>▣</span>AI Assistant</button>
+      <button class="nav-link" data-page="device"><span>⚙</span>Settings</button>
     </nav>
     <div class="sidebar-footer">
       <span class="status-dot" id="sideDot"></span><span id="sideStatus">Waiting for telemetry</span>
@@ -33,36 +42,75 @@
       </div>
       <div class="top-actions">
         <button class="icon-button" id="refreshButton" type="button" title="Refresh data">↻</button>
-        <div class="online-pill"><span class="status-dot" id="topDot"></span><span id="topStatus">Offline</span></div>
       </div>
     </header>
 
     <section class="page active" id="page-overview">
-      <article class="hero-card">
-        <div><div class="live-label">● LIVE ESTIMATE</div><h2 id="currentLocation">Waiting for a scan…</h2><p id="lastUpdate">No telemetry received yet.</p></div>
-        <span class="mode-badge" id="locationConfidence">NOT CALIBRATED</span>
-      </article>
       <div class="stat-grid">
-        <article class="stat-card"><span>Wi-Fi uplink</span><strong id="wifiStatus">—</strong><small id="wifiDetail">Waiting for device status</small></article>
-        <article class="stat-card"><span>Motion</span><strong id="motionValue">—</strong><small id="motionDetail">LIS3DH status</small></article>
-        <article class="stat-card"><span>Latest scan APs</span><strong id="apCount">0</strong><small id="scanAge">No scan data</small></article>
-        <article class="stat-card"><span>Battery monitoring</span><strong id="batteryValue">Not monitored</strong><small id="batteryDetail">No battery measurement circuit</small></article>
+        <article class="stat-card"><span>Total scans</span><strong id="scanTotal">0</strong><small id="scanTotalDetail">Across saved scan history</small><span class="stat-icon blue">⌁</span></article>
+        <article class="stat-card"><span>Unique access points</span><strong id="uniqueApCount">0</strong><small id="apCount">0 detected in latest scan</small><span class="stat-icon indigo">▦</span></article>
+        <article class="stat-card location-stat"><span>Estimated location</span><strong id="currentLocation">Waiting for a scan</strong><small id="lastUpdate">No telemetry received yet.</small><span class="mode-badge" id="locationConfidence">NOT CALIBRATED</span><span class="stat-icon red">⌖</span></article>
+        <article class="stat-card"><span>Motion status</span><strong id="motionValue">Unavailable</strong><small id="motionDetail">Waiting for sensor data</small><span class="stat-icon amber">∿</span></article>
       </div>
-      <div class="content-grid">
+      <div class="content-grid dashboard-main-grid">
         <article class="panel">
-          <div class="panel-header"><h3>Live room location</h3><button class="small-button" data-open="location">Open map</button></div>
-          <div id="overviewMap" class="room-list"><div class="empty-state">Add a room to see the live map.</div></div>
-          <div class="map-legend"><span><i class="legend-dot tracker-dot"></i>Live estimate</span><span><i class="legend-dot ap-dot"></i>Configured Wi-Fi signal</span><span><i class="legend-dot fp-dot"></i>Fingerprint</span></div>
+          <div class="panel-header"><h3>Live Wi-Fi access points</h3><button class="small-button" data-open="signals">View all</button></div>
+          <div class="table-scroll">
+            <table class="access-point-table"><thead><tr><th>#</th><th>SSID</th><th>BSSID</th><th>RSSI (dBm)</th><th>Channel</th><th>Distance (m)</th></tr></thead>
+              <tbody id="overviewAccessPoints"><tr><td colspan="6" class="empty-state">Waiting for scan data.</td></tr></tbody>
+            </table>
+          </div>
         </article>
         <article class="panel">
-          <div class="panel-header"><div><h3>Latest scan</h3><small id="latestScanLabel">Waiting for scan</small></div><button class="small-button" data-open="signals">View signals</button></div>
-          <div id="scanQualitySummary" class="scan-quality-strip" aria-label="Latest scan quality"></div>
-          <div id="signalSnapshot" class="signal-list"><div class="empty-state">No scan data yet.</div></div>
+          <div class="panel-header"><h3>Floor map &amp; estimated location</h3><button class="small-button" data-open="location">Open map</button></div>
+          <div id="overviewMap" class="room-list overview-map"><div class="empty-state">Add a room to see the live map.</div></div>
+        </article>
+      </div>
+      <div class="content-grid dashboard-bottom-grid">
+        <article class="panel">
+          <div class="panel-header"><div><h3>RSSI signal strength</h3><small id="latestScanLabel">Latest scan</small></div><button class="small-button" data-open="signals">View signals</button></div>
+          <div id="rssiChart" class="rssi-chart" aria-label="RSSI signal strength chart"><div class="empty-state">No scan data yet.</div></div>
+        </article>
+        <article class="panel">
+          <div class="panel-header"><h3>Recent scan history</h3><button class="small-button" data-open="history">View history</button></div>
+          <div class="table-scroll"><table class="history-preview-table"><thead><tr><th>Time</th><th>APs</th><th>Motion</th><th>Status</th></tr></thead>
+            <tbody id="overviewHistoryRows"><tr><td colspan="4" class="empty-state">Waiting for scan data.</td></tr></tbody>
+          </table></div>
+        </article>
+      </div>
+      <div class="dashboard-support" hidden aria-hidden="true">
+        <div id="scanQualitySummary"></div><div id="signalSnapshot"></div>
+        <span id="wifiStatus"></span><span id="wifiDetail"></span><span id="scanAge"></span>
+        <span id="batteryValue"></span><span id="batteryDetail"></span>
+        <table><tbody id="recentRows"></tbody></table>
+      </div>
+    </section>
+
+    <section class="page hidden" id="page-live">
+      <div class="content-grid live-data-layout">
+        <article class="panel">
+          <div class="panel-header"><div><h3>Live Wi-Fi access points</h3><small id="liveScanTimestamp">Waiting for the first device scan</small></div><span class="live-indicator"><i></i>Live</span></div>
+          <div class="table-scroll">
+            <table class="live-data-table"><thead><tr><th>#</th><th>SSID</th><th>BSSID</th><th>RSSI (dBm)</th><th>Channel</th><th>Distance (m)</th><th>Last seen</th></tr></thead>
+              <tbody id="liveAccessPointRows"><tr><td colspan="7" class="empty-state">Waiting for scan data.</td></tr></tbody>
+            </table>
+          </div>
+        </article>
+        <article class="panel live-scan-details">
+          <div class="panel-header"><h3>Scan information</h3></div>
+          <dl class="details">
+            <div><dt>Device</dt><dd id="liveDeviceId">—</dd></div>
+            <div><dt>Scan time</dt><dd id="liveScanTime">—</dd></div>
+            <div><dt>Total access points</dt><dd id="liveApCount">0</dd></div>
+            <div><dt>Motion</dt><dd id="liveMotionStatus">—</dd></div>
+            <div><dt>Wi-Fi uplink</dt><dd id="liveWifiStatus">—</dd></div>
+            <div><dt>Device IP</dt><dd id="liveDeviceIp">—</dd></div>
+          </dl>
         </article>
       </div>
       <article class="panel">
-        <div class="panel-header"><h3>Recent observations</h3><button class="small-button" data-open="history">View history</button></div>
-        <div class="table-scroll"><table class="recent-table"><thead><tr><th>Time</th><th>Network</th><th>Observed room</th><th>Signal room</th><th>RSSI</th><th>Distance</th><th>Motion</th></tr></thead><tbody id="recentRows"><tr><td colspan="7" class="empty-state">Waiting for scan data.</td></tr></tbody></table></div>
+        <div class="panel-header"><div><h3>Live RSSI chart</h3><small>Signal strength per detected access point</small></div></div>
+        <div id="liveRssiChart" class="rssi-chart" aria-label="Live RSSI signal strength chart"><div class="empty-state">No scan data yet.</div></div>
       </article>
     </section>
 
@@ -97,7 +145,7 @@
 
     <section class="page hidden" id="page-signals">
       <article class="panel">
-        <div class="panel-header"><h3>Add or update a Wi-Fi signal</h3></div>
+        <div class="panel-header"><h3>Configure access points</h3></div>
         <form id="signalForm" class="form-grid signal-form">
           <label class="field full">Detected in latest scan<select id="detectedAccessPoint"><option value="">Choose a detected network to fill its details</option></select></label>
           <label class="field">BSSID / MAC<input name="bssid" list="apOptions" placeholder="aa:bb:cc:dd:ee:ff" required><datalist id="apOptions"></datalist></label>
@@ -112,7 +160,7 @@
         <div id="signalConfigList" class="saved-list"></div>
       </article>
       <article class="panel">
-        <div class="panel-header"><div><h3>Latest scan result</h3><small id="scanSummary">Waiting for the next scan</small></div></div>
+        <div class="panel-header"><div><h3>Latest detected access points</h3><small id="scanSummary">Waiting for the next scan</small></div></div>
         <div class="table-scroll"><table><thead><tr><th>SSID</th><th>BSSID</th><th>Room</th><th>RSSI</th><th>Channel</th><th>Approx. distance (m)</th><th>Signal quality</th></tr></thead><tbody id="signalRows"><tr><td colspan="7" class="empty-state">No access points in the latest scan.</td></tr></tbody></table></div>
         <p class="footnote">RSSI distance is an estimate, not a measured range.</p>
       </article>
@@ -165,6 +213,28 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </main>
+  <section class="chatbot-panel" id="chatbotPanel" aria-label="TrackSense AI assistant" aria-hidden="true">
+    <div class="chatbot-header">
+      <span class="chatbot-avatar" aria-hidden="true">✦</span>
+      <div><strong>TrackSense AI</strong><small>Answers from the latest scans · private/local</small></div>
+      <button class="chat-close" id="chatClose" type="button" aria-label="Close assistant">×</button>
+    </div>
+    <div class="chatbot-messages" id="chatMessages" role="log" aria-live="polite">
+      <div class="chat-message assistant-message">Hi! Ask me about your live scan, RSSI, estimated distance in meters, access points, location, motion, or device status. I refresh from your saved scan data before replying, and keep it on your dashboard server.</div>
+      <div class="chat-suggestions">
+        <button type="button" data-chat-prompt="Which access point has the strongest signal?">Strongest access point?</button>
+        <button type="button" data-chat-prompt="Where is the device located?">Where is the device?</button>
+      </div>
+    </div>
+    <form class="chatbot-form" id="chatForm">
+      <label class="sr-only" for="chatInput">Ask a question about your scan data</label>
+      <input id="chatInput" name="question" maxlength="400" placeholder="Ask a question about your scan data…" autocomplete="off" required>
+      <button type="submit" aria-label="Send message">Send</button>
+    </form>
+  </section>
+  <button class="chatbot-launcher" id="chatbotToggle" type="button" aria-label="Open TrackSense AI assistant" aria-expanded="false">
+    <span aria-hidden="true">✦</span><span>Ask TrackSense AI</span>
+  </button>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/app.js"></script>
 </body>
